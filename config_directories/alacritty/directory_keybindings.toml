@@ -1,0 +1,4 @@
+# [keyboard]
+# bindings = [
+#     { key = "P", mods = "Control|Shift", command = { program = "cd", args = ["${PROJECT}"] } },
+# ]

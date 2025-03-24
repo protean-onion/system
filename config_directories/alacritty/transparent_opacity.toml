@@ -1,0 +1,5 @@
+# Opacity configurations specific to each kind kind of Alacritty window.
+# See whether this conflicts with picom settings. In my opinion,
+# this way is better.
+[window]
+opacity = 0

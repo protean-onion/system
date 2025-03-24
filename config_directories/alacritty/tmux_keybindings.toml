@@ -1,0 +1,14 @@
+[keyboard]
+bindings = [
+    { key = "N", mods = "Control", command = { program = "tmux", args = ["new-window", "-c", "#{pane_current_path}"] } },
+    { key = "Tab", mods = "Control", command = { program = "tmux", args = ["next-window"] } },
+    { key = "Tab", mods = "Control|Shift", command = { program = "tmux", args = ["previous-window"] } },
+    { key = "W", mods = "Control", command = { program = "tmux", args = ["kill-pane"] } },
+    { key = "W", mods = "Control|Shift", command = { program = "tmux", args = ["kill-window"] } },
+    { key = "-", mods = "Control", command = { program = "tmux", args = ["split-window", "-v", "-c", "#{pane_current_path}"] } },
+    { key = "\\", mods = "Control", command = { program = "tmux", args = ["split-window", "-h", "-c", "#{pane_current_path}"] } },
+    { key = "Return", mods = "Control", command = { program = "tmux", args = ["split-window", "-v", "-l", "20%", "-c", "#{pane_current_path}"] } },
+    { key = "F", mods = "Control", command = { program = "tmux", args = ["resize-pane", "-Z"] } },
+
+
+]

@@ -1,0 +1,6 @@
+import = [
+    "/home/protean-onion/.system/config_directories/alacritty/theme.toml",
+    "/home/protean-onion/.system/config_directories/alacritty/opaque_opacity.toml",
+    "/home/protean-onion/.system/config_directories/alacritty/tmux_keybindings.toml",
+    "/home/protean-onion/.system/config_directories/alacritty/directory_keybindings.toml"
+]

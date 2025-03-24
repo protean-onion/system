@@ -1,0 +1,11 @@
+[Unit]
+Description=Set brightness file permissions
+After=multi-user.target
+
+[Service]
+Type=oneshot
+ExecStart=/bin/bash -c 'chmod 777 /sys/devices/pci0000:00/0000:00:02.0/drm/card1/card1-eDP-1/intel_backlight/brightness || chmod 777 /sys/devices/pci0000:00/0000:00:02.0/drm/card2/card2-eDP-1/intel_backlight/brightness'
+User=root
+
+[Install]
+WantedBy=multi-user.target

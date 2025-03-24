@@ -1,0 +1,522 @@
+# i3 config file (v4)
+#
+#  Please see https://i3wm.org/docs/userguide.html for a complete reference!
+#
+# This config file uses keycodes (bindsym) and was written for the QWERTY
+# layout.
+#
+# To get a config file with the same key positions, but for your current
+# layout, use the i3-config-wizard
+
+set $PROJECT "/home/protean-onion/Projects/code/study/therustprogramminglanguage"
+
+
+set $mod Mod4
+set $altmod Mod1
+
+# source bashrc
+exec_always source ~/.bashrc
+
+# natural Scrolling
+exec xinput set-prop "SYNA8022:00 06CB:CE67 Touchpad" "libinput Natural Scrolling Enabled" 1
+
+# Font for window titles. Will also be used by the bar unless a different font
+# is used in the bar {} block below.
+font pango:monospace 8
+
+# This font is widely installed, provides lots of unicode glyphs, right-to-left
+# text rendering and scalability on retina/hidpi displays (thanks to pango).
+# font pango:DejaVu Sans Mono 8
+
+# Start XDG autostart .desktop files using dex. See also
+# https://wiki.archlinux.org/index.php/XDG_Autostart
+exec --no-startup-id dex --autostart --environment i3
+
+# The combination of xss-lock, nm-applet and pactl is a popular choice, so
+# they are included here as an example. Modify as you see fit.
+
+# xss-lock grabs a logind suspend inhibit lock and will use i3lock to lock the
+# screen before suspend. Use loginctl lock-session to lock your screen.
+# exec --no-startup-id xss-lock --transfer-sleep-lock -- i3lock --nofork
+
+# NetworkManager is the most popular way to manage wireless networks on Linux,
+# and nm-applet is a desktop environment-independent system tray GUI for it.
+exec --no-startup-id nm-applet
+
+# Use pactl to adjust volume in PulseAudio.
+set $refresh_i3status killall -SIGUSR1 i3status
+bindsym XF86AudioRaiseVolume exec --no-startup-id pactl set-sink-volume @DEFAULT_SINK@ +10% && $refresh_i3status
+bindsym XF86AudioLowerVolume exec --no-startup-id pactl set-sink-volume @DEFAULT_SINK@ -10% && $refresh_i3status
+bindsym shift+XF86AudioRaiseVolume exec --no-startup-id pactl set-sink-volume @DEFAULT_SINK@ +1% && $refresh_i3status
+bindsym shift+XF86AudioLowerVolume exec --no-startup-id pactl set-sink-volume @DEFAULT_SINK@ -1% && $refresh_i3status
+
+bindsym XF86AudioMute exec --no-startup-id pactl set-sink-mute @DEFAULT_SINK@ toggle && $refresh_i3status
+
+# Use brightnessctl to adjust brightness
+### When setting up, change permissions for /sys/class/backlight/intel_backlight/{actual_brightness, brightness}
+bindsym Shift+XF86MonBrightnessUp exec brightnessctl set +1%
+bindsym Shift+XF86MonBrightnessDown exec brightnessctl set 1%-
+bindsym XF86MonBrightnessUp exec brightnessctl set +10%
+bindsym XF86MonBrightnessDown exec brightnessctl set 10%-
+
+# bindsym $mod+z focus left
+# bindsym $mod+k focus down
+# bindsym $mod+l focus up
+# bindsym $mod+x focus right
+# 
+# bindsym $mod+Shift+Left move left
+# bindsym $mod+Shift+Down move down
+# bindsym $mod+Shift+Up move up
+# bindsym $mod+Shift+Right move right
+
+bindsym $mod+Shift+j move left
+bindsym $mod+Shift+k move down
+bindsym $mod+Shift+i move up
+bindsym $mod+Shift+l move right
+
+# Alt+Tab Window Switching:
+# Need to give permissions to the script
+### Switch on all workspaces https://github.com/yoshimoto/i3-alt-tab.py
+set $i3_mod_tab_all /home/protean-onion/Projects/code/installations/i3-alt-tab.py n all
+set $i3_mod_shift_tab_all /home/protean-onion/Projects/code/installations/i3-alt-tab.py p all
+bindsym $mod+Tab exec $i3_mod_tab_all
+bindsym $mod+Shift+Tab exec $i3_mod_shift_tab_all
+### Switch on current workspace https://github.com/sagb/alttab?tab=readme-ov-file
+exec_always --no-startup-id alttab -frame "#ffffff"
+
+# https://github.com/fondorg/i3wm-swipe-gesture-setup/tree/main
+exec_always libinput-gestures-setup start
+
+# Use Mouse+$mod to drag floating windows to their wanted position
+floating_modifier $mod
+
+# kill focused window
+bindsym $mod+Shift+q kill
+
+# Start rofi
+
+mode "Rofi" {
+
+		bindsym a exec "rofi -modi windowcd,window,run,drun,filebrowser -show drun"; mode "default"
+		bindsym c exec "rofi -modi windowcd,window -show window"; mode "default"
+		bindsym d exec "rofi -modi drun -show drun"; mode "default"
+		bindsym f exec "rofi -modi filebrowser -show filebrowser"; mode "default"
+		bindsym r exec "rofi -modi run -show run"; mode "default"
+		bindsym w exec "rofi -modi windowcd,window -show window"; mode "default"
+        
+		bindsym Return mode "default"
+		bindsym Escape mode "default"
+}
+
+# Activate rofi
+bindsym $mod+r mode "Rofi"
+
+# Change focus
+bindsym $mod+Left focus left
+bindsym $mod+Down focus down
+bindsym $mod+Up focus up
+bindsym $mod+Right focus right
+
+bindsym $mod+Shift+Left move left
+bindsym $mod+Shift+Down move down
+bindsym $mod+Shift+Up move up
+bindsym $mod+Shift+Right move right
+
+mode "Move and Resize" {
+
+		# Move
+		bindsym Left move left 100
+		bindsym Down move down 100
+		bindsym Up move up 100
+		bindsym Right move right 100
+
+		bindsym shift+Left move left 10
+		bindsym shift+Down move down 10
+		bindsym shift+Up move up 10
+		bindsym shift+Right move right 10
+
+		# Resize
+		bindsym Ctrl+Left resize shrink width 100 px or 100 ppt
+        bindsym Ctrl+Down resize grow height 100 px or 100 ppt
+        bindsym Ctrl+Up resize shrink height 100 px or 100 ppt
+        bindsym Ctrl+Right resize grow width 100 px or 100 ppt
+
+		bindsym Ctrl+shift+Left resize shrink width 10 px or 10 ppt
+        bindsym Ctrl+shift+Down resize grow height 10 px or 10 ppt
+        bindsym Ctrl+shift+Up resize shrink height 10 px or 10 ppt
+        bindsym Ctrl+shift+Right resize grow width 10 px or 10 ppt        		
+
+        # back to normal: Enter or Escape or $mod+r
+        bindsym Return mode "default"
+        bindsym Escape mode "default"
+}
+
+# Move and resize window (you can also use the mouse for that)
+bindsym $mod+m mode "Move and Resize"
+
+mode "Container Management" {
+        # Change container layout (stacked, tabbed, toggle split)
+        bindsym s layout stacking; mode "default"
+        bindsym w layout tabbed; mode "default"
+        bindsym e layout toggle split; mode "default"
+        # Split in horizontal orientation
+        bindsym h split h; mode "default"
+        # Split in vertical orientation
+        bindsym v split v; mode "default"
+        
+        # Focus the parent container
+        bindsym p focus parent
+        # Focus the child container
+        bindsym Shift+p focus child
+
+		bindsym Escape mode "default"
+}
+
+bindsym $mod+c mode "Container Management"
+
+# Enter fullscreen mode for the focused container
+bindsym $mod+f fullscreen toggle
+
+# Toggle tiling / floating
+bindsym $mod+space floating toggle
+
+# Change focus between tiling / floating windows
+# bindsym $mod+shift+space focus mode_toggle
+
+# Move the currently focused window to the scratchpad
+bindsym $mod+shift+grave move scratchpad
+# If there are multiple scratchpad windows, this command cycles through them.
+bindsym $mod+grave scratchpad show
+
+# Define names for default workspaces for which we configure key bindings later on.
+# We use variables to avoid repeating the names in multiple places.
+set $ws1 "1"
+set $ws2 "2"
+set $ws3 "3"
+set $ws4 "4"
+set $ws5 "5"
+set $ws6 "6"
+set $ws7 "7"
+set $ws8 "8"
+set $ws9 "9"
+set $ws10 "10"
+
+# Switch to workspace
+bindsym $mod+1 workspace number $ws1
+bindsym $mod+2 workspace number $ws2
+bindsym $mod+3 workspace number $ws3
+bindsym $mod+4 workspace number $ws4
+bindsym $mod+5 workspace number $ws5
+bindsym $mod+6 workspace number $ws6
+bindsym $mod+7 workspace number $ws7
+bindsym $mod+8 workspace number $ws8
+bindsym $mod+9 workspace number $ws9
+bindsym $mod+0 workspace number $ws10
+
+mode "Workspaces" {
+        
+    # Notes
+		bindsym n workspace number 1; mode "default"
+    # Browser
+		bindsym b workspace number 2; mode "default"
+    # Reading
+		bindsym r workspace number 3; mode "default"
+    # Discord
+    bindsym Shift+d workspace number 4; mode "default"
+    # Steam
+		bindsym S workspace number 5; mode "default"
+    # LaTeX
+    bindsym l workspace number 6; mode "default"
+    # AI
+    bindsym a workspace number 7; mode "default"
+    # Development
+		bindsym d workspace number 8; mode "default"
+    # Jupyter Notebook
+		bindsym j workspace number 9; mode "default"
+    # Station
+		bindsym s workspace number 10; mode "default"
+		# Performance
+		bindsym p workspace number 12; mode "default"
+    # OBS
+		bindsym o workspace number 13; mode "default"
+		# Workspace
+		bindsym w workspace number 100; mode "default"
+
+		# Yes, you can do this
+		bindsym z workspace number 100000; mode "default"
+        
+		bindsym Return mode "default"
+		bindsym Escape mode "default"
+}
+
+# Activate Mode Workspaces
+bindsym $mod+w mode "Workspaces"
+
+# Move focused container to workspace
+bindsym $mod+Shift+1 move container to workspace number $ws1
+bindsym $mod+Shift+2 move container to workspace number $ws2
+bindsym $mod+Shift+3 move container to workspace number $ws3
+bindsym $mod+Shift+4 move container to workspace number $ws4
+bindsym $mod+Shift+5 move container to workspace number $ws5
+bindsym $mod+Shift+6 move container to workspace number $ws6
+bindsym $mod+Shift+7 move container to workspace number $ws7
+bindsym $mod+Shift+8 move container to workspace number $ws8
+bindsym $mod+Shift+9 move container to workspace number $ws9
+bindsym $mod+Shift+0 move container to workspace number $ws10
+
+# reload the configuration file
+bindsym $mod+Shift+Ctrl+r reload
+# restart i3 inplace (preserves your layout/session, can be used to upgrade i3)
+bindsym $mod+Shift+r restart
+
+# Window information and borders
+default_border none
+default_floating_border none
+
+bindsym $mod+u border none
+# bindsym $mod+y border 
+# bindsym $mod+n border normal
+
+font xft:URWGothic-Book 11
+
+exec_always --no-startup-id . "/home/$USER/.config/polybar/launch.sh"
+
+# Theme colors
+# class                 border  backgr. text    indicator child_border
+# default
+client.focused			#ffffff #ffffff #000000 #ffffff #ffffff
+client.focused_inactive         #ffffff #ffffff #000000 #ffffff #ffffff
+client.unfocused	  	#ffffff #000000 #ffffff #ffffff #ffffff
+client.urgent 			  #ffffff #000000 #ffffff #ffffff #ffffff
+client.placeholder 		#ffffff #ffffff #ffffff #ffffff #ffffff
+
+
+# client.background #1e1e20
+
+# Gaps
+gaps inner 2
+gaps outer 2
+
+### Try getting this to work on the new system. https://github.com/jbenden/i3-gaps-rounded?tab=readme-ov-file#rounded-window-corners
+# border_radius 2
+
+# Press $mod+Shift+g to enter the gap mode. Choose o or i for modifying outer/inner gaps. Press one of + / - (in-/decrement for current workspace) or 0 (remove gaps for current workspace). If you also press Shift with these keys, the change will be global for all workspaces.
+set $mode_gaps Gaps: (o) outer, (i) inner
+set $mode_gaps_outer Outer Gaps: +|-|0 (local), Shift + +|-|0 (global)
+set $mode_gaps_inner Inner Gaps: +|-|0 (local), Shift + +|-|0 (global)
+bindsym $mod+Shift+g mode "$mode_gaps"
+
+mode "$mode_gaps" {
+        bindsym o      mode "$mode_gaps_outer"
+        bindsym i      mode "$mode_gaps_inner"
+        bindsym Return mode "default"
+        bindsym Escape mode "default"
+}
+mode "$mode_gaps_inner" {
+        bindsym plus  gaps inner current plus 5
+        bindsym minus gaps inner current minus 5
+        bindsym 0     gaps inner current set 0
+
+        bindsym Shift+plus  gaps inner all plus 5
+        bindsym Shift+minus gaps inner all minus 5
+        bindsym Shift+0     gaps inner all set 0
+
+        bindsym Return mode "default"
+        bindsym Escape mode "default"
+}
+mode "$mode_gaps_outer" {
+        bindsym plus  gaps outer current plus 5
+        bindsym minus gaps outer current minus 5
+        bindsym 0     gaps outer current set 0
+
+        bindsym Shift+plus  gaps outer all plus 5
+        bindsym Shift+minus gaps outer all minus 5
+        bindsym Shift+0     gaps outer all set 0
+
+        bindsym Return mode "default"
+        bindsym Escape mode "default"
+}
+
+# Move cursor with keyboard
+
+mode "Cursor" {
+
+	# set your three speeds here
+
+	set $slow 5
+	set $quick 50
+	set $fast 150
+	set $very_fast 300
+
+	# Mouse movement (slow/fine-tuned) -- arrow keys
+
+	bindsym shift+Left exec xdotool mousemove_relative -- -$slow 0
+	bindsym shift+Down exec xdotool mousemove_relative 0 $slow
+	bindsym shift+Up exec xdotool mousemove_relative -- 0 -$slow
+	bindsym shift+Right exec xdotool mousemove_relative $slow 0
+
+	# Mouse movement (quicker) -- arrow keys
+
+	bindsym Left exec xdotool mousemove_relative -- -$quick 0
+	bindsym Down exec xdotool mousemove_relative 0 $quick
+	bindsym Up exec xdotool mousemove_relative -- 0 -$quick
+	bindsym Right exec xdotool mousemove_relative $quick 0
+
+
+	# Mouse movement (fast) -- arrow keys
+
+	bindsym $mod+Left exec xdotool mousemove_relative -- -$fast 0
+	bindsym $mod+Down exec xdotool mousemove_relative 0 $fast
+	bindsym $mod+Up exec xdotool mousemove_relative -- 0 -$fast
+	bindsym $mod+Right exec xdotool mousemove_relative $fast 0
+
+	bindsym $mod+shift+Left exec xdotool mousemove_relative -- -$very_fast 0
+	bindsym $mod+shift+Down exec xdotool mousemove_relative 0 $very_fast
+	bindsym $mod+shift+Up exec xdotool mousemove_relative -- 0 -$very_fast
+	bindsym $mod+shift+Right exec xdotool mousemove_relative $very_fast 0
+
+
+	# Left Click
+	bindsym f exec xdotool click 1
+
+	# Middle Click
+	bindsym d exec xdotool click 2
+
+	# Right Click
+	bindsym s exec xdotool click 3
+
+	# Left Click-and-drag
+	bindsym Shift+f exec xdotool mousedown 1
+
+	# Middle Click-and-drag 
+	bindsym Shift+d exec xdotool mousedown 2
+
+	# Right Click-and-drag
+	bindsym Shift+s exec xdotool mousedown 3
+
+	# Left Drag release
+	bindsym $mod+f exec xdotool mouseup 1
+
+	# Middle Drag release
+	bindsym $mod+d exec xdotool mouseup 2
+
+	# Right Drag release
+	bindsym $mod+s exec xdotool mouseup 3
+
+	# return to normal keybindings -- IMPORTANT!!
+
+	bindsym Escape mode "default"
+}
+
+bindsym $mod+Shift+c mode "Cursor"
+
+###################
+###################
+
+
+# Custom Scripts
+
+mode "Scripts" {
+    bindsym s exec --no-startup-id tess-screen; mode "default"
+
+		bindsym Return mode "default"
+		bindsym Escape mode "default"
+}
+
+bindsym $mod+s mode "Scripts"
+
+# Screenshots
+bindsym Print exec --no-startup-id i-maim
+bindsym $mod+Print exec --no-startup-id i-maim -w
+bindsym Shift+Print exec --no-startup-id i-maim -s
+
+# Sloppy Tesseract
+# bindsym $altmod+Print exec --no-startup-id sh -c tess-screen # Needed to plumb deep to figure out why $altmod wasn't working.
+
+###################
+
+###################
+
+assign [class="Trilium Notes"] workspace 1
+assign [class="Vivaldi-stable"] workspace 2
+assign [class="discord"] workspace 4
+assign [class="NeoVim"] workspace  8
+assign [class="Development"] workspace  8
+assign [class="Station"] workspace 10
+assign [class="texpresso"] workspace 6
+assign [class="LaTeX Editor"] workspace 6
+
+bindsym $mod+Control+Return [instance="Nomad"] scratchpad show
+bindsym $mod+Control+s [instance="spotify"] scratchpad show
+bindsym $mod+Control+n [instance="org.gnome.Nautilus"] scratchpad show
+# bindsym $mod+v [instance="copyq"] scratchpad show
+
+bindsym $mod+Return exec alacritty
+bindsym $mod+Control+shift+Return exec alacritty --class Nomad --title Nomad --config-file /home/protean-onion/.system/config_directories/alacritty/nomad_alacritty.toml -e tmux new-session -A -s NOMAD 
+bindsym $mod+Control+shift+j exec jupyter-notebook
+bindsym $mod+Control+shift+s exec spotify
+bindsym $mod+Control+shift+n exec nautilus
+
+mode "Instantiate" {
+    bindsym d exec --no-startup-id alacritty --class Development --title Development --hold -e tmux new-session -A -s DEVELOPMENT -c $PROJECT; mode "default"
+    bindsym s exec --no-startup-id alacritty --class Station --title Station --hold -e tmux new-session -A -t STATION; mode "default"
+    bindsym l exec --no-startup-id alacritty --class "LaTeX Editor" --title "LaTeX Editor" --config-file /home/protean-onion/.system/config_directories/alacritty/latex_alacritty.toml -e tmux new-session -A -s LATEX; mode "default"
+
+    bindsym Escape mode "default"
+  }
+
+bindsym $mod+i mode "Instantiate"
+
+mode "CopyQ" {
+    bindsym Escape [instance="copyq"] scratchpad show; mode "default"
+}
+
+bindsym $mod+v mode "CopyQ"; [instance="copyq"] scratchpad show
+
+exec --no-startup-id tmux new-session -d -s NOMAD
+exec --no-startup-id tmux new-session -d -s DEVELOPMENT -c $PROJECT
+exec --no-startup-id tmux new-session -d -s STATION
+
+exec --no-startup-id alacritty --class Nomad --title Nomad --config-file /home/protean-onion/.system/config_directories/alacritty/nomad_alacritty.toml --hold -e tmux attach-session -t NOMAD
+exec --no-startup-id alacritty --class Development --title Development --hold -e tmux attach-session -t DEVELOPMENT -c $PROJECT
+exec --no-startup-id alacritty --class Station --title Station --hold -e tmux attach-session -t STATION
+exec --no-startup-id tmux split-window -v -l 17% -s DEVELOPMENT -c $PROJECT
+
+exec --no-startup-id nautilus
+exec --no-startup-id spotify
+exec --no-startup-id trilium
+exec --no-startup-id vivaldi
+exec --no-startup-id discord
+
+exec sleep 3
+
+for_window [instance="Nomad"] floating enable, resize set 1610 950, move scratchpad, border none, move position 150 124
+for_window [instance="spotify"] floating enable, resize set 1600 1000, move position 177 87, move scratchpad, border none
+for_window [instance="copyq"] floating enable, resize set 800 400, move scratchpad, border none
+for_window [instance="org.gnome.Nautilus"] floating enable, resize set 800 800, move scratchpad, border none
+for_window [instance="Clipse"] floating enable, resize set 1000 800, border none
+for_window [instance="LaTeX Editor"] floating enable, resize set 1912 1162, move position 4 34, border none
+for_window [instance="texpresso"] floating enable, resize set 1912 1162, move position 4 34, bortexpresso 
+###################
+# Ollama
+exec --no-startup-id ollama serve
+###################
+# clipse clipboard manager
+### Doesn't work on my system.
+# exec --no-startup-id /home/protean-onion/Projects/code/anima-mundi/people/savedra1/clipse/clipse -listen # run listener on startup
+# bindsym $mod+v exec --no-startup-id alacritty --class Clipse -e "$SHELL" -c "i3-msg 'floating enable' && /home/protean-onion/Projects/code/anima-mundi/people/savedra1/clipse/clipse > ~/clipse.log 2>&1" # Bind floating shell with TUI selection to something nice
+###################
+# Microphone control
+bindsym XF86AudioMicMute exec pactl set-source-mute @DEFAULT_SOURCE@ toggle
+###################
+# Configure screen at startup
+exec --no-startup-id sleep 2; xrandr --output eDP-1 --mode 1920x1200 --gamma 0.75:0.8:0.98
+exec --no-startup-id sleep 5; nitrogen --restore &
+exec --no-startup-id picom --config ~/.system/config_directories/picom/picom.conf
+###################
+exec --no-startup-id copyq; sleep 1
+exec --no-startup-id copyq show
+###############################################################
+
+# Ideas
+### Scratchpad management mode
