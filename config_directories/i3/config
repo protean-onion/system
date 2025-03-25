@@ -459,7 +459,7 @@ bindsym $mod+Control+shift+n exec nautilus
 
 mode "Instantiate" {
     bindsym d exec --no-startup-id alacritty --class Development --title Development --hold -e tmux new-session -A -s DEVELOPMENT -c $PROJECT; mode "default"
-    bindsym s exec --no-startup-id alacritty --class Station --title Station --hold -e tmux new-session -A -t STATION; mode "default"
+    bindsym s exec --no-startup-id alacritty --class Station --title Station --config-file /home/protean-onion/.system/config_directories/alacritty/station_alacritty.toml --hold -e tmux new-session -A -t STATION; mode "default"
     bindsym l exec --no-startup-id alacritty --class "LaTeX Editor" --title "LaTeX Editor" --config-file /home/protean-onion/.system/config_directories/alacritty/latex_alacritty.toml -e tmux new-session -A -s LATEX; mode "default"
 
     bindsym Escape mode "default"
@@ -479,7 +479,7 @@ exec --no-startup-id tmux new-session -d -s STATION
 
 exec --no-startup-id alacritty --class Nomad --title Nomad --config-file /home/protean-onion/.system/config_directories/alacritty/nomad_alacritty.toml --hold -e tmux attach-session -t NOMAD
 exec --no-startup-id alacritty --class Development --title Development --hold -e tmux attach-session -t DEVELOPMENT -c $PROJECT
-exec --no-startup-id alacritty --class Station --title Station --hold -e tmux attach-session -t STATION
+exec --no-startup-id alacritty --class Station --title Station --config-file /home/protean-onion/.system/config_directories/alacritty/station_alacritty.toml --hold -e tmux attach-session -t STATION
 exec --no-startup-id tmux split-window -v -l 17% -s DEVELOPMENT -c $PROJECT
 
 exec --no-startup-id nautilus
