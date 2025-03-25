@@ -344,3 +344,10 @@ alias copy="xclip -selection clipboard"
 
 # pkg-config configuration
 # export PKG_CONFIG_PATH="/usr/lib/pkgconfig:/usr/lib/x86_64-linux-gnu/pkgconfig:$PKG_CONFIG_PATH"
+
+# SSH configuration
+if [ -n "$SSH_CONNECTION" ] || [ -n "$SSH_TTY" ]; then
+  dunstify "SSH Successful"
+  echo "SSH connection successful"
+  /home/protean-onion/.system/scripts/i3-sockets.sh
+fi

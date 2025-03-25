@@ -2,4 +2,4 @@
 # See whether this conflicts with picom settings. In my opinion,
 # this way is better.
 [window]
-opacity = 0.8
+opacity = 0.5
