@@ -8,7 +8,7 @@
         "Translucence.theme.css"
     ],
     "enableReactDevtools": false,
-    "frameless": false,
+    "frameless": true,
     "transparent": true,
     "winCtrlQ": false,
     "disableMinSize": false,
@@ -567,6 +567,6 @@
         "authenticated": false,
         "url": "https://api.vencord.dev/",
         "settingsSync": false,
-        "settingsSyncVersion": 1742322078813
+        "settingsSyncVersion": 1742976084512
     }
 }

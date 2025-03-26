@@ -1,0 +1,1127 @@
+
+Directory: lua/
+----------
+
+File: lua/texpresso.lua
+----------
+1 local M = {}
+2 
+3 -- Configuration
+4 
+5 M.texpresso_path = "texpresso"
+6 
+7 -- Logging routines
+8 
+9 -- Debug logging function, silent by default
+10 -- Change this variable to redirect the debug log.
+11 -- E.g. require('texpresso').logger = foo
+12 M.logger = nil
+13 
+14 -- Cache last arguments passed to TeXpresso
+15 M.last_args = {}
+16 
+17 -- Debug printing function
+18 -- It uses vim.inspect to pretty-print and vim.schedule
+19 -- to delay printing when vim is textlocked.
+20 local function p(...)
+21   if M.logger then
+22     local args = {...}
+23     if #args == 1 then args = args[1] end
+24     local text = vim.inspect(args)
+25     vim.schedule(function() M.logger(text) end)
+26   end
+27 end
+28 
+29 -- ID of the buffer storing TeXpresso log
+30 -- TODO: current logic is clunky when the buffer is closed.
+31 --       look how other plugins handle that.
+32 local log_buffer_id = -1
+33 
+34 -- Get the ID of the logging buffer, creating it if it does not exist.
+35 local function log_buffer()
+36   if not vim.api.nvim_buf_is_valid(log_buffer_id) then
+37     for _, buf in ipairs(vim.api.nvim_list_bufs()) do
+38       if vim.api.nvim_buf_get_name(buf) == "texpresso-log" then
+39         log_buffer_id = buf
+40       end
+41     end
+42   end
+43   if not vim.api.nvim_buf_is_valid(log_buffer_id) then
+44     log_buffer_id = vim.api.nvim_create_buf(true, true)
+45     vim.api.nvim_buf_set_name(log_buffer_id, "texpresso-log")
+46   end
+47   return log_buffer_id
+48 end
+49 
+50 -- Append an array of lines to a buffer
+51 -- The first entry is appended to the last line, other entries introduce new
+52 -- lines.
+53 local function buffer_append(buf, lines)
+54   local last = vim.api.nvim_buf_get_lines(buf, -2, -1, false)
+55   lines[1] = last[1] .. lines[1]
+56   vim.api.nvim_buf_set_lines(buf, -2, -1, false, lines)
+57 end
+58 
+59 -- Get buffer lines as a single string,
+60 -- suitable for serialization to TeXpresso.
+61 local function buffer_get_lines(buf, first, last)
+62   if first == last then
+63     return ""
+64   else
+65     return table.concat(vim.api.nvim_buf_get_lines(buf, first, last, false), "\n") .. "\n"
+66   end
+67 end
+68 
+69 -- Format a color VIM color to a TeXpresso color.
+70 -- VIM represents a color as a single integer, encoding it as 0xRRGGBB.
+71 -- RR, GG, BB are 8-bit unsigned integers.
+72 -- TeXpresso represents a color as triple (R, G, B).
+73 -- R, G, B are floating points in the 0.0 .. 1.0 range.
+74 local function format_color(c)
+75   local b = math.fmod(c, 256) / 255
+76   c = math.floor(c / 256)
+77   local g = math.fmod(c, 256) / 255
+78   c = math.floor(c / 256)
+79   local r = math.fmod(c, 256) / 255
+80   return {r, g, b}
+81 end
+82 
+83 -- Tell VIM to display file:line
+84 local skip_synctex = false
+85 local function synctex_backward(file, line)
+86   skip_synctex = true
+87   if not(pcall(function() vim.cmd("b +" .. line .. " " .. file) end)) then
+88     vim.cmd("e +" .. line .. " " .. file)
+89   end
+90 end
+91 
+92 -- Manage quickfix list
+93 
+94 -- Allocate and reuse a quickfix id
+95 local qfid = -1
+96 local function getqfid()
+97   local id = vim.fn.getqflist({id=qfid}).id
+98   if id > 0 then
+99     return id
+100   end
+101   vim.fn.setqflist({}, ' ', { title = "TeXpresso" })
+102   qfid = vim.fn.getqflist({id=0}).id
+103   return qfid
+104 end
+105 
+106 -- Set quickfix items
+107 local function setqf(items)
+108   local idx
+109   idx = vim.fn.getqflist({id=getqfid(), idx=0}).idx
+110   vim.fn.setqflist({}, 'r', {id=getqfid(), items = items, idx=idx})
+111 end
+112 
+113 -- Parse a Tectonic diagnostic line to quickfix format
+114 local function format_fix(line)
+115   local typ, f, l, txt
+116   typ, f, l, txt = string.match(line, "([a-z]+): (.*):(%d*): (.*)")
+117   if string.match(txt, "^Overfull") or string.match(txt, "^Underfull") then
+118     return {}
+119   elseif typ then
+120     return { type = typ, filename = f, lnum = l, text = txt }
+121   else
+122     return { text = line }
+123   end
+124 end
+125 
+126 -- TeXpresso process internal state
+127 local job = {
+128   queued = nil,
+129   process = nil,
+130   generation = {},
+131 }
+132 
+133 -- Log output from TeX
+134 M.log = {}
+135 
+136 -- Problems (warnings and errors) emitted by TeX
+137 M.fix = {}
+138 M.fixcursor = 0
+139 
+140 local function shrink(tbl, count)
+141   for _ = count, #tbl - 1 do
+142     table.remove(tbl)
+143   end
+144 end
+145 
+146 local function expand(tbl, count, default)
+147   for i = #tbl + 1, count do
+148     table.insert(tbl, i, default)
+149   end
+150 end
+151 
+152 -- Internal functions to communicate with TeXpresso
+153 
+154 -- Process a message received from TeXpresso
+155 -- TODO: handle message, right now they are only logged
+156 local function process_message(json)
+157   -- p(json)
+158   local msg = json[1]
+159   if msg == "reset-sync" then
+160     job.generation = {}
+161   elseif msg == "synctex" then
+162     vim.schedule(function() synctex_backward(json[2], json[3]) end)
+163   elseif msg == "truncate-lines" then
+164     local name = json[2]
+165     local count = json[3]
+166     if name == "log" then
+167       shrink(M.log, count)
+168       expand(M.log, count, "")
+169     elseif name == "out" then
+170       expand(M.fix, count, {})
+171       M.fixcursor = count
+172     end
+173   elseif msg == "append-lines" then
+174     local name = json[2]
+175     if name == "log" then
+176       for i=3,#json do
+177         table.insert(M.log, json[i])
+178       end
+179     elseif name == "out" then
+180       for i=3,#json do
+181         local cursor = M.fixcursor + 1
+182         M.fixcursor = cursor
+183         M.fix[cursor] = format_fix(json[i])
+184       end
+185       vim.schedule(function() setqf(M.fix) end)
+186     end
+187   elseif msg == "flush" then
+188     shrink(M.fix, M.fixcursor)
+189     vim.schedule(function() setqf(M.fix) end)
+190   end
+191 end
+192 
+193 -- Send a command to TeXpresso
+194 function M.send(...)
+195   local text = vim.json.encode({...})
+196   if job.process then
+197     vim.fn.chansend(job.process, {text, ""})
+198   end
+199   -- p(text)
+200 end
+201 
+202 -- Reload buffer in TeXpresso
+203 function M.reload(buf)
+204   local path = vim.api.nvim_buf_get_name(buf)
+205   M.send("open", path, buffer_get_lines(buf, 0, -1))
+206 end
+207 
+208 -- Communicate changed lines
+209 function M.change_lines(buf, index, count, last)
+210   -- p("on_lines " .. vim.inspect{buf, index, index + count, last})
+211   local path = vim.api.nvim_buf_get_name(buf)
+212   local lines = buffer_get_lines(buf, index, last)
+213   M.send("change-lines", path, index, count, lines)
+214 end
+215 
+216 -- Attach a hook to synchronize a buffer
+217 function M.attach(...)
+218   local let args = {...}
+219   local buf = args[1] or 0
+220   local generation = job.generation
+221   M.reload(buf)
+222   vim.api.nvim_buf_attach(buf, false, {
+223     on_detach=function(_detach, buf)
+224       M.send("close", vim.api.nvim_buf_get_name(buf))
+225     end,
+226     on_reload=function(_reload, buf)
+227       M.reload(buf)
+228       generation = job.generation
+229     end,
+230     on_lines=function(_lines, buf, _tick, first, oldlast, newlast, _bytes)
+231       if generation == job.generation then
+232         M.change_lines(buf, first, oldlast - first, newlast)
+233       else
+234         M.reload(buf)
+235         generation = job.generation
+236       end
+237     end,
+238   })
+239 end
+240 
+241 -- Public API
+242 
+243 -- Use VIM theme in TeXpresso
+244 function M.theme()
+245   local colors = vim.api.nvim_get_hl_by_name("Normal", true)
+246   if colors.background and colors.foreground then
+247     M.send(
+248       "theme",
+249       format_color(colors.background),
+250       format_color(colors.foreground)
+251     )
+252   end
+253 end
+254 
+255 -- Go to next page
+256 function M.next_page()
+257   M.send("next-page")
+258 end
+259 
+260 -- Go to previous page
+261 function M.previous_page()
+262   M.send("previous-page")
+263 end
+264 
+265 -- Go to the page under the cursor
+266 function M.synctex_forward()
+267   local line,_col = unpack(vim.api.nvim_win_get_cursor(0))
+268   local file = vim.api.nvim_buf_get_name(0)
+269   M.send("synctex-forward", file, line)
+270 end
+271 
+272 local last_line = -1
+273 local last_file = ""
+274 
+275 function M.synctex_forward_hook()
+276   if skip_synctex then
+277     skip_synctex = false
+278     return
+279   end
+280 
+281   local line,_col = unpack(vim.api.nvim_win_get_cursor(0))
+282   local file = vim.api.nvim_buf_get_name(0)
+283   if last_line == line and last_file == file then
+284     return
+285   end
+286   last_line = line
+287   last_file = file
+288   M.send("synctex-forward", file, line)
+289 end
+290 
+291 -- Start a new TeXpresso viewer
+292 function M.launch(args)
+293   if job.process then
+294     vim.fn.chanclose(job.process)
+295   end
+296   cmd = {M.texpresso_path, "-json", "-lines"}
+297 
+298   if #args == 0 then
+299     args = M.last_args
+300   else
+301     M.last_args = args
+302   end
+303   if #args == 0 then
+304     print("No root file has been specified, use e.g. :TeXpresso main.tex")
+305     return
+306   end
+307 
+308   for _, arg in ipairs(args) do
+309       table.insert(cmd, arg)
+310   end
+311   job.queued = ""
+312   job.process = vim.fn.jobstart(cmd, {
+313       on_stdout = function(j, data, e)
+314         if job.queued then
+315           data[1] = job.queued .. data[1]
+316         end
+317         job.queued = table.remove(data)
+318         for _, line in ipairs(data) do
+319           if line ~= "" then
+320             local ok, val = pcall(function ()
+321               process_message(vim.json.decode(line))
+322             end)
+323             if not ok then
+324               p("error while processing input", line, val)
+325             end
+326           end
+327         end
+328       end,
+329       on_stderr = function(j, d, e)
+330         local buf = log_buffer()
+331         buffer_append(buf, d)
+332         if vim.api.nvim_buf_line_count(buf) > 8000 then
+333           vim.api.nvim_buf_set_lines(buf, 0, -4000, false, {})
+334         end
+335       end,
+336       on_exit = function()
+337         job.process = nil
+338       end,
+339   })
+340   job.generation = {}
+341   M.theme()
+342 end
+343 
+344 -- Hooks
+345 
+346 vim.api.nvim_create_autocmd("ColorScheme", {
+347   callback = M.theme
+348 })
+349 
+350 vim.api.nvim_create_autocmd("CursorMoved", {
+351   pattern = {"*.tex"},
+352   callback = M.synctex_forward_hook
+353 })
+354 
+355 -- VIM commands
+356 
+357 vim.api.nvim_create_user_command('TeXpresso',
+358   function(opts)
+359     M.launch(opts.fargs)
+360   end,
+361   { nargs = "*",
+362     complete = "file",
+363   }
+364 )
+365 
+366 return M
+
+----------
+
+Directory: lua/plugins
+----------
+    
+File: lua/plugins/luasnip.lua
+----------
+1 return {
+2   "L3MON4D3/LuaSnip",
+3   version = "v2.*",
+4   build = "make install_jsregexp",
+5   event = "InsertEnter",
+6   config = function()
+7     require("luasnip.loaders.from_lua").lazy_load({ paths = "./lua/luasnip/" })
+8     local ls = require("luasnip")
+9     ls.setup({
+10       update_events = { "TextChanged", "TextChangedI" },
+11       enable_autosnippets = true,
+12       store_selection_keys = "<Tab>",
+13     })
+14     vim.keymap.set({ "i" }, "<C-k>", function()
+15       ls.expand()
+16     end, { silent = true, desc = "expand autocomplete" })
+17     vim.keymap.set({ "i", "s" }, "<C-j>", function()
+18       ls.jump(1)
+19     end, { silent = true, desc = "next autocomplete" })
+20     vim.keymap.set({ "i", "s" }, "<C-L>", function()
+21       ls.jump(-1)
+22     end, { silent = true, desc = "previous autocomplete" })
+23     vim.keymap.set({ "i", "s" }, "<C-E>", function()
+24       if ls.choice_active() then
+25         ls.change_choice(1)
+26       end
+27     end, { silent = true, desc = "select autocomplete" })
+28   end,
+29 }
+
+----------
+    
+File: lua/plugins/nvim-tree.lua
+----------
+1 return {
+2   "nvim-tree/nvim-tree.lua",
+3   version = "*",
+4   lazy = false,
+5   dependencies = {
+6     "nvim-tree/nvim-web-devicons",
+7   },
+8   config = function()
+9     require("nvim-tree").setup({})
+10   end,
+11 }
+
+----------
+    
+File: lua/plugins/colorscheme.lua
+----------
+1 return {
+2   {
+3     "folke/tokyonight.nvim",
+4     opts = {
+5       transparent = true,
+6       styles = {
+7         sidebars = "transparent",
+8         floats = "transparent",
+9       },
+10     },
+11   },
+12 }
+
+----------
+    
+File: lua/plugins/cmp.lua
+----------
+1 return {
+2   "hrsh7th/nvim-cmp",
+3   opts = function(_, opts)
+4     -- Disable auto-triggered completion
+5     opts.completion = {
+6       autocomplete = false,
+7     }
+8 
+9     -- Add Shift+Tab mapping to trigger completion
+10     local cmp = require("cmp")
+11     opts.mapping = vim.tbl_extend("force", opts.mapping, {
+12       ["<S-Tab>"] = cmp.mapping(function()
+13         if cmp.visible() then
+14           -- Navigate up in the completion list if visible
+15           cmp.select_prev_item()
+16         else
+17           -- Trigger completion if not visible
+18           cmp.complete()
+19         end
+20       end, { "i", "s" }),
+21     })
+22 
+23     return opts
+24   end,
+25 }
+
+----------
+    
+File: lua/plugins/vimtex.lua
+----------
+1 return {
+2   "lervag/vimtex",
+3   lazy = false, -- we don't want to lazy load VimTeX
+4   -- tag = "v2.15", -- uncomment to pin to a specific release
+5   init = function()
+6     -- VimTeX configuration goes here, e.g.
+7     vim.g.vimtex_view_method = "zathura"
+8   end,
+9 }
+
+----------
+    
+File: lua/plugins/barbar.lua
+----------
+1 return {
+2   {
+3     "romgrk/barbar.nvim",
+4     dependencies = {
+5       "lewis6991/gitsigns.nvim", -- OPTIONAL: for git status
+6       "nvim-tree/nvim-web-devicons", -- OPTIONAL: for file icons
+7     },
+8     init = function()
+9       vim.g.barbar_auto_setup = false
+10     end,
+11     opts = {
+12       -- lazy.nvim will automatically call setup for you. put your options here, anything missing will use the default:
+13       -- animation = true,
+14       -- insert_at_start = true,
+15       -- …etc.
+16     },
+17     version = "^1.0.0", -- optional: only update when a new 1.x version is released
+18   },
+19 }
+
+----------
+    
+File: lua/plugins/tmux-title.lua
+----------
+1 -- Add this to a new file in your LazyVim custom config folder
+2 -- ~/.config/nvim/lua/plugins/tmux-title.lua
+3 
+4 return {
+5   -- This creates a plugin spec that runs your custom code
+6   {
+7     "LazyVim/LazyVim",
+8     opts = function()
+9       -- Set terminal title to current filename
+10       vim.opt.title = true
+11       vim.opt.titlestring = "%t"
+12 
+13       -- Additional fallback method using autocmd
+14       vim.api.nvim_create_autocmd({ "BufEnter" }, {
+15         callback = function()
+16           local filename = vim.fn.expand("%:t")
+17           if filename ~= "" then
+18             vim.fn.system('printf "\\033]2;' .. filename .. '\\033\\\\"')
+19           end
+20         end,
+21       })
+22     end,
+23   },
+24 }
+
+----------
+    
+File: lua/plugins/vim-visual-multi.lua
+----------
+1 return {
+2   "mg979/vim-visual-multi",
+3   event = "VeryLazy",
+4   branch = "master",
+5 }
+
+----------
+    
+File: lua/plugins/rectangular-bar.lua
+----------
+1 return {
+2   "nvim-lualine/lualine.nvim",
+3   opts = function(_, opts)
+4     opts.options = vim.tbl_deep_extend("force", opts.options, {
+5       component_separators = { left = "|", right = "|" },
+6       section_separators = { left = "", right = "" },
+7     })
+8     return opts
+9   end,
+10 }
+
+----------
+    
+File: lua/plugins/telescope.lua
+----------
+1 return {
+2   {
+3     "nvim-telescope/telescope.nvim",
+4     opts = {
+5       pickers = {
+6         find_files = {
+7           hidden = true,
+8         },
+9       },
+10     },
+11   },
+12 }
+
+----------
+
+Directory: lua/config
+----------
+    
+File: lua/config/keymaps.lua
+----------
+1 -- Keymaps are automatically loaded on the VeryLazy event
+2 -- Default keymaps that are always set: https://github.com/LazyVim/LazyVim/blob/main/lua/lazyvim/config/keymaps.lua
+3 -- Add any additional keymaps here
+4 
+5 -- All of this came from barbar.nvim
+6 local map = vim.api.nvim_set_keymap
+7 local opts = { noremap = true, silent = true }
+8 
+9 -- Move to previous/next
+10 map("n", "<A-Tab>", "<Cmd>BufferPrevious<CR>", opts)
+11 map("n", "<A-S-Tab>", "<Cmd>BufferNext<CR>", opts)
+12 
+13 -- Re-order to previous/next
+14 map("n", "<A-<>", "<Cmd>BufferMovePrevious<CR>", opts)
+15 map("n", "<A->>", "<Cmd>BufferMoveNext<CR>", opts)
+16 
+17 -- Goto buffer in position...
+18 map("n", "<A-1>", "<Cmd>BufferGoto 1<CR>", opts)
+19 map("n", "<A-2>", "<Cmd>BufferGoto 2<CR>", opts)
+20 map("n", "<A-3>", "<Cmd>BufferGoto 3<CR>", opts)
+21 map("n", "<A-4>", "<Cmd>BufferGoto 4<CR>", opts)
+22 map("n", "<A-5>", "<Cmd>BufferGoto 5<CR>", opts)
+23 map("n", "<A-6>", "<Cmd>BufferGoto 6<CR>", opts)
+24 map("n", "<A-7>", "<Cmd>BufferGoto 7<CR>", opts)
+25 map("n", "<A-8>", "<Cmd>BufferGoto 8<CR>", opts)
+26 map("n", "<A-9>", "<Cmd>BufferGoto 9<CR>", opts)
+27 map("n", "<A-0>", "<Cmd>BufferLast<CR>", opts)
+28 
+29 -- Pin/unpin buffer
+30 map("n", "<A-p>", "<Cmd>BufferPin<CR>", opts)
+31 
+32 -- Goto pinned/unpinned buffer
+33 --                 :BufferGotoPinned
+34 --                 :BufferGotoUnpinned
+35 
+36 -- Close buffelocal map = vim.api.nvim_set_keymap
+37 local opts = { noremap = true, silent = true }
+38 
+39 -- Move to previous/next
+40 map("n", "<A-,>", "<Cmd>BufferPrevious<CR>", opts)
+41 map("n", "<A-.>", "<Cmd>BufferNext<CR>", opts)
+42 
+43 -- Re-order to previous/next
+44 map("n", "<A-<>", "<Cmd>BufferMovePrevious<CR>", opts)
+45 map("n", "<A->>", "<Cmd>BufferMoveNext<CR>", opts)
+46 
+47 -- Goto buffer in position...
+48 map("n", "<A-1>", "<Cmd>BufferGoto 1<CR>", opts)
+49 map("n", "<A-2>", "<Cmd>BufferGoto 2<CR>", opts)
+50 map("n", "<A-3>", "<Cmd>BufferGoto 3<CR>", opts)
+51 map("n", "<A-4>", "<Cmd>BufferGoto 4<CR>", opts)
+52 map("n", "<A-5>", "<Cmd>BufferGoto 5<CR>", opts)
+53 map("n", "<A-6>", "<Cmd>BufferGoto 6<CR>", opts)
+54 map("n", "<A-7>", "<Cmd>BufferGoto 7<CR>", opts)
+55 map("n", "<A-8>", "<Cmd>BufferGoto 8<CR>", opts)
+56 map("n", "<A-9>", "<Cmd>BufferGoto 9<CR>", opts)
+57 map("n", "<A-0>", "<Cmd>BufferLast<CR>", opts)
+58 
+59 -- Pin/unpin buffer
+60 map("n", "<A-p>", "<Cmd>BufferPin<CR>", opts)
+61 
+62 -- Goto pinned/unpinned buffer
+63 --                 :BufferGotoPinned
+64 --                 :BufferGotoUnpinned
+65 
+66 -- Close buffer
+67 map("n", "<A-w>", "<Cmd>BufferClose<CR>", opts)
+68 
+69 -- Wipeout buffer
+70 --                 :BufferWipeout
+71 
+72 -- Close commands
+73 --                 :BufferCloseAllButCurrent
+74 --                 :BufferCloseAllButPinned
+75 --                 :BufferCloseAllButCurrentOrPinned
+76 --                 :BufferCloseBuffersLeft
+77 --                 :BufferCloseBuffersRight
+78 
+79 -- Magic buffer-picking mode
+80 map("n", "<C-p>", "<Cmd>BufferPick<CR>", opts)
+81 map("n", "<C-s-p>", "<Cmd>BufferPickDelete<CR>", opts)
+82 
+83 -- Sort automatically by...
+84 map("n", "<Space>bb", "<Cmd>BufferOrderByBufferNumber<CR>", opts)
+85 map("n", "<Space>bn", "<Cmd>BufferOrderByName<CR>", opts)
+86 map("n", "<Space>bd", "<Cmd>BufferOrderByDirectory<CR>", opts)
+87 map("n", "<Space>bl", "<Cmd>BufferOrderByLanguage<CR>", opts)
+88 map("n", "<Space>bw", "<Cmd>BufferOrderByWindowNumber<CR>", opts)
+89 
+90 -- Other:
+91 -- :BarbarEnable - enables barbar (enabled by default)
+92 -- :BarbarDisable - very bad command, should never be usedlocal map = vim.api.nvim_set_keymap
+93 local opts = { noremap = true, silent = true }
+94 
+95 -- Move to previous/next
+96 map("n", "<A-,>", "<Cmd>BufferPrevious<CR>", opts)
+97 map("n", "<A-.>", "<Cmd>BufferNext<CR>", opts)
+98 
+99 -- Re-order to previous/next
+100 map("n", "<A-<>", "<Cmd>BufferMovePrevious<CR>", opts)
+101 map("n", "<A->>", "<Cmd>BufferMoveNext<CR>", opts)
+102 
+103 -- Goto buffer in position...
+104 map("n", "<A-1>", "<Cmd>BufferGoto 1<CR>", opts)
+105 map("n", "<A-2>", "<Cmd>BufferGoto 2<CR>", opts)
+106 map("n", "<A-3>", "<Cmd>BufferGoto 3<CR>", opts)
+107 map("n", "<A-4>", "<Cmd>BufferGoto 4<CR>", opts)
+108 map("n", "<A-5>", "<Cmd>BufferGoto 5<CR>", opts)
+109 map("n", "<A-6>", "<Cmd>BufferGoto 6<CR>", opts)
+110 map("n", "<A-7>", "<Cmd>BufferGoto 7<CR>", opts)
+111 map("n", "<A-8>", "<Cmd>BufferGoto 8<CR>", opts)
+112 map("n", "<A-9>", "<Cmd>BufferGoto 9<CR>", opts)
+113 map("n", "<A-0>", "<Cmd>BufferLast<CR>", opts)
+114 
+115 -- Pin/unpin buffer
+116 map("n", "<A-p>", "<Cmd>BufferPin<CR>", opts)
+117 
+118 -- Goto pinned/unpinned buffer
+119 --                 :BufferGotoPinned
+120 --                 :BufferGotoUnpinned
+121 
+122 -- Close buffer
+123 map("n", "<A-c>", "<Cmd>BufferClose<CR>", opts)
+124 
+125 -- Wipeout buffer
+126 --                 :BufferWipeout
+127 
+128 -- Close commands
+129 --                 :BufferCloseAllButCurrent
+130 --                 :BufferCloseAllButPinned
+131 --                 :BufferCloseAllButCurrentOrPinned
+132 --                 :BufferCloseBuffersLeft
+133 --                 :BufferCloseBuffersRight
+134 
+135 -- Magic buffer-picking mode
+136 map("n", "<C-p>", "<Cmd>BufferPick<CR>", opts)
+137 map("n", "<C-s-p>", "<Cmd>BufferPickDelete<CR>", opts)
+138 
+139 -- Sort automatically by...
+140 map("n", "<Space>bb", "<Cmd>BufferOrderByBufferNumber<CR>", opts)
+141 map("n", "<Space>bn", "<Cmd>BufferOrderByName<CR>", opts)
+142 map("n", "<Space>bd", "<Cmd>BufferOrderByDirectory<CR>", opts)
+143 map("n", "<Space>bl", "<Cmd>BufferOrderByLanguage<CR>", opts)
+144 map("n", "<Space>bw", "<Cmd>BufferOrderByWindowNumber<CR>", opts)
+145 
+146 -- Other:
+147 -- :BarbarEnable - enables barbar (enabled by default)
+148 -- :BarbarDisable - very bad command, should never be usedlocal map = vim.api.nvim_set_keymap
+149 local opts = { noremap = true, silent = true }
+150 
+151 -- Move to previous/next
+152 map("n", "<A-,>", "<Cmd>BufferPrevious<CR>", opts)
+153 map("n", "<A-.>", "<Cmd>BufferNext<CR>", opts)
+154 
+155 -- Re-order to previous/next
+156 map("n", "<A-<>", "<Cmd>BufferMovePrevious<CR>", opts)
+157 map("n", "<A->>", "<Cmd>BufferMoveNext<CR>", opts)
+158 
+159 -- Goto buffer in position...
+160 map("n", "<A-1>", "<Cmd>BufferGoto 1<CR>", opts)
+161 map("n", "<A-2>", "<Cmd>BufferGoto 2<CR>", opts)
+162 map("n", "<A-3>", "<Cmd>BufferGoto 3<CR>", opts)
+163 map("n", "<A-4>", "<Cmd>BufferGoto 4<CR>", opts)
+164 map("n", "<A-5>", "<Cmd>BufferGoto 5<CR>", opts)
+165 map("n", "<A-6>", "<Cmd>BufferGoto 6<CR>", opts)
+166 map("n", "<A-7>", "<Cmd>BufferGoto 7<CR>", opts)
+167 map("n", "<A-8>", "<Cmd>BufferGoto 8<CR>", opts)
+168 map("n", "<A-9>", "<Cmd>BufferGoto 9<CR>", opts)
+169 map("n", "<A-0>", "<Cmd>BufferLast<CR>", opts)
+170 
+171 -- Pin/unpin buffer
+172 map("n", "<A-p>", "<Cmd>BufferPin<CR>", opts)
+173 
+174 -- Goto pinned/unpinned buffer
+175 --                 :BufferGotoPinned
+176 --                 :BufferGotoUnpinned
+177 
+178 -- Close buffer
+179 map("n", "<A-c>", "<Cmd>BufferClose<CR>", opts)
+180 
+181 -- Wipeout buffer
+182 --                 :BufferWipeout
+183 
+184 -- Close commands
+185 --                 :BufferCloseAllButCurrent
+186 --                 :BufferCloseAllButPinned
+187 --                 :BufferCloseAllButCurrentOrPinned
+188 --                 :BufferCloseBuffersLeft
+189 --                 :BufferCloseBuffersRight
+190 
+191 -- Magic buffer-picking mode
+192 map("n", "<C-p>", "<Cmd>BufferPick<CR>", opts)
+193 map("n", "<C-s-p>", "<Cmd>BufferPickDelete<CR>", opts)
+194 
+195 -- Sort automatically by...
+196 map("n", "<Space>bb", "<Cmd>BufferOrderByBufferNumber<CR>", opts)
+197 map("n", "<Space>bn", "<Cmd>BufferOrderByName<CR>", opts)
+198 map("n", "<Space>bd", "<Cmd>BufferOrderByDirectory<CR>", opts)
+199 map("n", "<Space>bl", "<Cmd>BufferOrderByLanguage<CR>", opts)
+200 map("n", "<Space>bw", "<Cmd>BufferOrderByWindowNumber<CR>", opts)
+201 
+202 -- Other:
+203 -- :BarbarEnable - enables barbar (enabled by default)
+204 -- :BarbarDisable - very bad command, should never be usedr
+205 map("n", "<A-c>", "<Cmd>BufferClose<CR>", opts)
+206 
+207 -- Wipeout buffer
+208 --                 :BufferWipeout
+209 
+210 -- Close commands
+211 --                 :BufferCloseAllButCurrent
+212 --                 :BufferCloseAllButPinned
+213 --                 :BufferCloseAllButCurrentOrPinned
+214 --                 :BufferCloseBuffersLeft
+215 --                 :BufferCloseBuffersRight
+216 
+217 -- Magic buffer-picking mode
+218 map("n", "<C-p>", "<Cmd>BufferPick<CR>", opts)
+219 map("n", "<C-s-p>", "<Cmd>BufferPickDelete<CR>", opts)
+220 
+221 -- Sort automatically by...
+222 map("n", "<Space>bb", "<Cmd>BufferOrderByBufferNumber<CR>", opts)
+223 map("n", "<Space>bn", "<Cmd>BufferOrderByName<CR>", opts)
+224 map("n", "<Space>bd", "<Cmd>BufferOrderByDirectory<CR>", opts)
+225 map("n", "<Space>bl", "<Cmd>BufferOrderByLanguage<CR>", opts)
+226 map("n", "<Space>bw", "<Cmd>BufferOrderByWindowNumber<CR>", opts)
+227 
+228 -- Other:
+229 -- :BarbarEnable - enables barbar (enabled by default)
+230 -- :BarbarDisable - very bad command, should never be used
+
+----------
+    
+File: lua/config/lazy.lua
+----------
+1 local lazypath = vim.fn.stdpath("data") .. "/lazy/lazy.nvim"
+2 if not (vim.uv or vim.loop).fs_stat(lazypath) then
+3   local lazyrepo = "https://github.com/folke/lazy.nvim.git"
+4   local out = vim.fn.system({ "git", "clone", "--filter=blob:none", "--branch=stable", lazyrepo, lazypath })
+5   if vim.v.shell_error ~= 0 then
+6     vim.api.nvim_echo({
+7       { "Failed to clone lazy.nvim:\n", "ErrorMsg" },
+8       { out, "WarningMsg" },
+9       { "\nPress any key to exit..." },
+10     }, true, {})
+11     vim.fn.getchar()
+12     os.exit(1)
+13   end
+14 end
+15 vim.opt.rtp:prepend(lazypath)
+16 
+17 require("lazy").setup({
+18   spec = {
+19     -- add LazyVim and import its plugins
+20     { "LazyVim/LazyVim", import = "lazyvim.plugins" },
+21     -- import/override with your plugins
+22     { import = "plugins" },
+23   },
+24   defaults = {
+25     -- By default, only LazyVim plugins will be lazy-loaded. Your custom plugins will load during startup.
+26     -- If you know what you're doing, you can set this to `true` to have all your custom plugins lazy-loaded by default.
+27     lazy = false,
+28     -- It's recommended to leave version=false for now, since a lot the plugin that support versioning,
+29     -- have outdated releases, which may break your Neovim install.
+30     version = false, -- always use the latest git commit
+31     -- version = "*", -- try installing the latest stable version for plugins that support semver
+32   },
+33   install = { colorscheme = { "tokyonight", "habamax" } },
+34   checker = {
+35     enabled = true, -- check for plugin updates periodically
+36     notify = false, -- notify on update
+37   }, -- automatically check for plugin updates
+38   performance = {
+39     rtp = {
+40       -- disable some rtp plugins
+41       disabled_plugins = {
+42         "gzip",
+43         -- "matchit",
+44         -- "matchparen",
+45         -- "netrwPlugin",
+46         "tarPlugin",
+47         "tohtml",
+48         "tutor",
+49         "zipPlugin",
+50       },
+51     },
+52   },
+53 })
+
+----------
+    
+File: lua/config/autocmds.lua
+----------
+1 -- Autocmds are automatically loaded on the VeryLazy event
+2 -- Default autocmds that are always set: https://github.com/LazyVim/LazyVim/blob/main/lua/lazyvim/config/autocmds.lua
+3 --
+4 -- Add any additional autocmds here
+5 -- with `vim.api.nvim_create_autocmd`
+6 --
+7 -- Or remove existing autocmds by their group name (which is prefixed with `lazyvim_` for the defaults)
+8 -- e.g. vim.api.nvim_del_augroup_by_name("lazyvim_wrap_spell")
+9 
+10 -- [ 21/03/25 ] https://stackoverflow.com/a/15124717/27002740.
+11 -- Then, I got Claude to translate it to LazyVim for me: https://claude.ai/share/183aa120-afbc-452e-871e-6d5409ae882c.
+12 vim.api.nvim_create_autocmd({ "BufReadPost", "FileReadPost", "BufNewFile" }, {
+13   callback = function()
+14     local full_path = vim.fn.expand("%")
+15     local filename = vim.fn.fnamemodify(full_path, ":t")
+16     if filename ~= "" then
+17       vim.fn.system("tmux rename-window " .. filename)
+18     end
+19   end,
+20 })
+
+----------
+    
+File: lua/config/options.lua
+----------
+1 -- Options are automatically loaded before lazy.nvim startup
+2 -- Default options that are always set: https://github.com/LazyVim/LazyVim/blob/main/lua/lazyvim/config/options.lua
+3 -- Add any additional options here
+
+----------
+    
+File: lua/config/example.lua
+----------
+1 -- since this is just an example spec, don't actually load anything here and return an empty spec
+2 -- stylua: ignore
+3 -- if true then return {} end
+4 
+5 -- every spec file under the "plugins" directory will be loaded automatically by lazy.nvim
+6 --
+7 -- In your plugin files, you can:
+8 -- * add extra plugins
+9 -- * disable/enabled LazyVim plugins
+10 -- * override the configuration of LazyVim plugins
+11 return {
+12   -- add gruvbox
+13   { "ellisonleao/gruvbox.nvim" },
+14 
+15   -- Configure LazyVim to load gruvbox
+16   {
+17     "LazyVim/LazyVim",
+18     opts = {
+19       colorscheme = "gruvbox",
+20     },
+21   },
+22 
+23   -- change trouble config
+24   {
+25     "folke/trouble.nvim",
+26     -- opts will be merged with the parent spec
+27     opts = { use_diagnostic_signs = true },
+28   },
+29 
+30   -- disable trouble
+31   { "folke/trouble.nvim", enabled = false },
+32 
+33   -- override nvim-cmp and add cmp-emoji
+34   {
+35     "hrsh7th/nvim-cmp",
+36     dependencies = { "hrsh7th/cmp-emoji" },
+37     ---@param opts cmp.ConfigSchema
+38     opts = function(_, opts)
+39       table.insert(opts.sources, { name = "emoji" })
+40     end,
+41   },
+42 
+43   -- change some telescope options and a keymap to browse plugin files
+44   {
+45     "nvim-telescope/telescope.nvim",
+46     keys = {
+47       -- add a keymap to browse plugin files
+48       -- stylua: ignore
+49       {
+50         "<leader>fp",
+51         function() require("telescope.builtin").find_files({ cwd = require("lazy.core.config").options.root }) end,
+52         desc = "Find Plugin File",
+53       },
+54     },
+55     -- change some options
+56     opts = {
+57       defaults = {
+58         layout_strategy = "horizontal",
+59         layout_config = { prompt_position = "top" },
+60         sorting_strategy = "ascending",
+61         winblend = 0,
+62       },
+63     },
+64   },
+65 
+66   -- add pyright to lspconfig
+67   {
+68     "neovim/nvim-lspconfig",
+69     ---@class PluginLspOpts
+70     opts = {
+71       ---@type lspconfig.options
+72       servers = {
+73         -- pyright will be automatically installed with mason and loaded with lspconfig
+74         pyright = {},
+75       },
+76     },
+77   },
+78 
+79   -- add tsserver and setup with typescript.nvim instead of lspconfig
+80   {
+81     "neovim/nvim-lspconfig",
+82     dependencies = {
+83       "jose-elias-alvarez/typescript.nvim",
+84       init = function()
+85         require("lazyvim.util").lsp.on_attach(function(_, buffer)
+86           -- stylua: ignore
+87           vim.keymap.set( "n", "<leader>co", "TypescriptOrganizeImports", { buffer = buffer, desc = "Organize Imports" })
+88           vim.keymap.set("n", "<leader>cR", "TypescriptRenameFile", { desc = "Rename File", buffer = buffer })
+89         end)
+90       end,
+91     },
+92     ---@class PluginLspOpts
+93     opts = {
+94       ---@type lspconfig.options
+95       servers = {
+96         -- tsserver will be automatically installed with mason and loaded with lspconfig
+97         tsserver = {},
+98       },
+99       -- you can do any additional lsp server setup here
+100       -- return true if you don't want this server to be setup with lspconfig
+101       ---@type table<string, fun(server:string, opts:_.lspconfig.options):boolean?>
+102       setup = {
+103         -- example to setup with typescript.nvim
+104         tsserver = function(_, opts)
+105           require("typescript").setup({ server = opts })
+106           return true
+107         end,
+108         -- Specify * to use this function as a fallback for any server
+109         -- ["*"] = function(server, opts) end,
+110       },
+111     },
+112   },
+113 
+114   -- for typescript, LazyVim also includes extra specs to properly setup lspconfig,
+115   -- treesitter, mason and typescript.nvim. So instead of the above, you can use:
+116   { import = "lazyvim.plugins.extras.lang.typescript" },
+117 
+118   -- add more treesitter parsers
+119   {
+120     "nvim-treesitter/nvim-treesitter",
+121     opts = {
+122       ensure_installed = {
+123         "bash",
+124         "html",
+125         "javascript",
+126         "json",
+127         "lua",
+128         "markdown",
+129         "markdown_inline",
+130         "python",
+131         "query",
+132         "regex",
+133         "tsx",
+134         "typescript",
+135         "vim",
+136         "yaml",
+137       },
+138     },
+139   },
+140 
+141   -- since `vim.tbl_deep_extend`, can only merge tables and not lists, the code above
+142   -- would overwrite `ensure_installed` with the new value.
+143   -- If you'd rather extend the default config, use the code below instead:
+144   {
+145     "nvim-treesitter/nvim-treesitter",
+146     opts = function(_, opts)
+147       -- add tsx and treesitter
+148       vim.list_extend(opts.ensure_installed, {
+149         "tsx",
+150         "typescript",
+151       })
+152     end,
+153   },
+154 
+155   -- the opts function can also be used to change the default opts:
+156   {
+157     "nvim-lualine/lualine.nvim",
+158     event = "VeryLazy",
+159     opts = function(_, opts)
+160       table.insert(opts.sections.lualine_x, {
+161         function()
+162           return "😄"
+163         end,
+164       })
+165     end,
+166   },
+167 
+168   -- or you can return new options to override all the defaults
+169   {
+170     "nvim-lualine/lualine.nvim",
+171     event = "VeryLazy",
+172     opts = function()
+173       return {
+174         --[[add your custom lualine config here]]
+175       }
+176     end,
+177   },
+178 
+179   -- use mini.starter instead of alpha
+180   { import = "lazyvim.plugins.extras.ui.mini-starter" },
+181 
+182   -- add jsonls and schemastore packages, and setup treesitter for json, json5 and jsonc
+183   { import = "lazyvim.plugins.extras.lang.json" },
+184 
+185   -- add any tools you want to have installed below
+186   {
+187     "williamboman/mason.nvim",
+188     opts = {
+189       ensure_installed = {
+190         "stylua",
+191         "shellcheck",
+192         "shfmt",
+193         "flake8",
+194       },
+195     },
+196   },
+197 }
+
+----------
+
+Directory: lua/luasnip
+----------
+    
+File: lua/luasnip/all.lua
+----------
+
+----------
+    
+File: lua/luasnip/tex.lua
+----------
+
+----------

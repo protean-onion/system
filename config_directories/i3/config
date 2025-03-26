@@ -82,7 +82,7 @@ set $i3_mod_shift_tab_all /home/protean-onion/Projects/code/installations/i3-alt
 bindsym $mod+Tab exec $i3_mod_tab_all
 bindsym $mod+Shift+Tab exec $i3_mod_shift_tab_all
 ### Switch on current workspace https://github.com/sagb/alttab?tab=readme-ov-file
-exec_always --no-startup-id alttab -frame "#ffffff"
+# exec_always --no-startup-id alttab -frame "#ffffff"
 
 # https://github.com/fondorg/i3wm-swipe-gesture-setup/tree/main
 exec_always libinput-gestures-setup start
@@ -445,6 +445,7 @@ assign [class="Development"] workspace  8
 assign [class="Station"] workspace 10
 assign [class="texpresso"] workspace 6
 assign [class="LaTeX Editor"] workspace 6
+assign [class="firefox"] workspace 7
 
 bindsym $mod+Control+Return [instance="Nomad"] scratchpad show
 bindsym $mod+Control+s [instance="spotify"] scratchpad show
@@ -487,6 +488,7 @@ exec --no-startup-id spotify
 exec --no-startup-id trilium
 exec --no-startup-id vivaldi
 exec --no-startup-id discord
+exec --no-startup-id firefox
 
 exec sleep 3
 
